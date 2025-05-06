@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Landslide Route Predictor</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.min.js"></script>
+    <style>
+        #map { height: 500px; width: 100%; margin-bottom: 1em; }
+        body { font-family: Arial, sans-serif; text-align: center; padding: 1em; }
+        input { padding: 6px; margin: 6px; width: 200px; }
+        button { padding: 8px 16px; margin-top: 10px; }
+        h3 { margin-top: 1em; }
+    </style>
+</head>
+<body>
+    <h2>🌍 Landslide Risk Route Planner</h2>
+
+    <input type="text" id="start" placeholder="Enter Start Location (e.g. PES University)" />
+    <input type="text" id="end" placeholder="Enter Destination (e.g. Nandi Hills)" />
+    <br>
+    <button onclick="calculateRoute()">Calculate Route</button>
+    <button onclick="resetForm()">Reset</button>
+
+    <div id="map"></div>
+    <div id="message"></div>
+
+    <script>
+        let map = L.map('map').setView([13.02, 77.5], 9);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        let control = null;
+        let rerouteControl = null;
+
+        async function calculateRoute() {
+            if (!navigator.onLine) {
+                showMessage("🚫 No Internet Connection. Please reconnect and reload.", "red");
+                return;
+            }
+
+            const start = document.getElementById("start").value;
+            const end = document.getElementById("end").value;
+            clearRoutes();
+
+            if (!start || !end) {
+                showMessage("❗ Please enter both start and end locations.", "red");
+                return;
+            }
+
+            const coords = await getCoordinates(start, end);
+            if (!coords) return;
+            const [startCoords, endCoords] = coords;
+
+            const midLat = (startCoords[0] + endCoords[0]) / 2;
+            const midLon = (startCoords[1] + endCoords[1]) / 2;
+
+            const risk = await fetchRisk(midLat, midLon);
+            if (risk === null) {
+                showMessage("⚠️ Error getting landslide risk.", "red");
+                return;
+            }
+
+            if (risk === 1) {
+                showMessage("🔴 High Landslide Risk. Rerouting...", "red");
+
+                control = L.Routing.control({
+                    waypoints: [
+                        L.latLng(...startCoords),
+                        L.latLng(...endCoords)
+                    ],
+                    routeWhileDragging: false,
+                    addWaypoints: false,
+                    show: false,
+                    lineOptions: {
+                        styles: [{ color: 'red', weight: 6 }]
+                    }
+                }).addTo(map);
+
+                control.on('routesfound', () => {
+                    const detour = getDetourPoint(startCoords, endCoords);
+                    rerouteControl = L.Routing.control({
+                        waypoints: [
+                            L.latLng(...startCoords),
+                            detour,
+                            L.latLng(...endCoords)
+                        ],
+                        routeWhileDragging: false,
+                        addWaypoints: false,
+                        show: false,
+                        lineOptions: {
+                            styles: [{ color: 'orange', weight: 6 }]
+                        }
+                    }).addTo(map);
+
+                    rerouteControl.on('routesfound', () => {
+                        showMessage("🟠 Alternate Route Suggested (Lower Risk).", "orange");
+                    });
+                });
+
+            } else {
+                showMessage("✅ Safe Route. Low landslide risk.", "green");
+
+                control = L.Routing.control({
+                    waypoints: [
+                        L.latLng(...startCoords),
+                        L.latLng(...endCoords)
+                    ],
+                    routeWhileDragging: false,
+                    addWaypoints: false,
+                    show: false,
+                    lineOptions: {
+                        styles: [{ color: 'green', weight: 6 }]
+                    }
+                }).addTo(map);
+            }
+        }
+
+        function getDetourPoint(start, end) {
+            const lat = (start[0] + end[0]) / 2 + 0.1;
+            const lon = (start[1] + end[1]) / 2 + 0.1;
+            return L.latLng(lat, lon);
+        }
+
+        function clearRoutes() {
+            if (control) {
+                map.removeControl(control);
+                control = null;
+            }
+            if (rerouteControl) {
+                map.removeControl(rerouteControl);
+                rerouteControl = null;
+            }
+        }
+
+        function resetForm() {
+            document.getElementById("start").value = "";
+            document.getElementById("end").value = "";
+            clearRoutes();
+            showMessage("🔄 Inputs and map reset successfully.", "blue");
+        }
+
+        async function getCoordinates(start, end) {
+            try {
+                const startRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(start)}`);
+                const endRes = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(end)}`);
+
+                const startData = await startRes.json();
+                const endData = await endRes.json();
+
+                if (!startData[0] || !endData[0]) {
+                    showMessage("❌ Unable to find one or both locations", "red");
+                    return null;
+                }
+
+                return [
+                    [parseFloat(startData[0].lat), parseFloat(startData[0].lon)],
+                    [parseFloat(endData[0].lat), parseFloat(endData[0].lon)]
+                ];
+            } catch (err) {
+                showMessage("🌐 Geocoding failed!", "red");
+                return null;
+            }
+        }
+
+        async function fetchRisk(lat, lon) {
+            try {
+                const response = await fetch("http://127.0.0.1:5000/predict", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        longitude: lon,
+                        latitude: lat,
+                        precipitation: 10,
+                        wind_speed: 5,
+                        location_accuracy: 3,
+                        event_time: 12,
+                        event_weekday: 5
+                    })
+                });
+
+                const data = await response.json();
+                return data.prediction;
+            } catch (err) {
+                console.error("Risk fetch error", err);
+                return null;
+            }
+        }
+
+        function showMessage(msg, color) {
+            document.getElementById("message").innerHTML = `<h3 style="color: ${color};">${msg}</h3>`;
+        }
+
+        // Detect internet disconnection
+        window.addEventListener('offline', () => {
+            showMessage("🚫 You are offline. Please check your internet connection.", "red");
+        });
+
+        window.addEventListener('online', () => {
+            showMessage("✅ Internet connection restored.", "green");
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+precipitation,landslide_size,location_accuracy,season_encoded,event_weekday,event_time,wind_speed,predicted_risk
+5,1,100,0,1,9,5,0
+200,4,30,2,3,22,55,0
+15,2,90,3,4,17,10,0
+180,5,20,2,5,10,70,0
